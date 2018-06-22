@@ -2,12 +2,34 @@ package analysis;
 
 import java.io.Serializable;
 
+import static com.complexible.common.rdf.model.Values.literal;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.ObjectInputStream;
 import java.io.PrintWriter;
 import java.util.*;
+
+import org.eclipse.rdf4j.model.IRI;
+import org.eclipse.rdf4j.model.Model;
+import org.eclipse.rdf4j.model.Statement;
+import org.eclipse.rdf4j.model.ValueFactory;
+import org.eclipse.rdf4j.model.impl.LinkedHashModel;
+import org.eclipse.rdf4j.model.impl.SimpleValueFactory;
+import org.eclipse.rdf4j.query.BindingSet;
+import org.eclipse.rdf4j.query.MalformedQueryException;
+import org.eclipse.rdf4j.query.QueryEvaluationException;
+import org.eclipse.rdf4j.query.TupleQuery;
+import org.eclipse.rdf4j.query.TupleQueryResult;
+import org.eclipse.rdf4j.repository.Repository;
+import org.eclipse.rdf4j.repository.RepositoryConnection;
+import org.eclipse.rdf4j.repository.RepositoryException;
+
+import com.complexible.common.openrdf.model.Models2;
+import com.complexible.common.rdf.model.Values;
+import com.complexible.stardog.api.ConnectionConfiguration;
+import com.complexible.stardog.rdf4j.StardogRepository;
 
 import ecproj.krgen.ClinicalTrialInfo;
 import ecproj.krgen.Criterion;
@@ -17,6 +39,7 @@ import ecproj.krgen.Group;
 import ecproj.krgen.UMLSConcept;
 import ecproj.krgen.Pattern;
 import ecproj.krgen.UMLSConceptList;
+
 import ecproj.krgen.Conflict;
 
 
@@ -34,7 +57,10 @@ public class ConflictAnalysis {
 	public static ArrayList<String> cuiList = new ArrayList<String>();
 	public static ArrayList<String> semanticTypeList = new ArrayList<String>();
 	
-
+    // for adding conflicts to the database
+	 private static final String CT = "http://stjohns.edu/clinicaltrialproj/";
+	 private static final String RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+	 
 	public static void main(String[] args) throws FileNotFoundException {
 	
 		ArrayList<ClinicalTrialInfo> trials = readSerializedList();
@@ -216,8 +242,131 @@ public class ConflictAnalysis {
 		
 		System.out.println("Criteria count: " + criteriaCount);
 		
+		addConflictsToDatabase(trials);
+		
 	}//end of main
 	
+	private static void addConflictsToDatabase(ArrayList<ClinicalTrialInfo> trials) {
+		try {
+			Model model = new LinkedHashModel();
+			// set up the repository 
+			Repository repo = new StardogRepository(ConnectionConfiguration
+			        .to("ctkr")
+			        .server("http://localhost:5820")
+			        .credentials("admin", "admin"));
+
+			         repo.initialize();
+
+      RepositoryConnection conn = repo.getConnection();
+     
+			for(ClinicalTrialInfo trial: trials){
+				String nctid = trial.getNctId();
+				
+				// we probably don't need to run this query to get the resource name
+				// because it can be formed from the nctid alone
+				/*System.out.println("running query for " + nctid);
+				TupleQuery query = conn.prepareTupleQuery("select ?trial where"
+						                                  + "{?trial ct:hasNCT \"" 
+						                                  + nctid + "\".}");
+				TupleQueryResult result = query.evaluate();
+				String trialResourceName;
+				// there should only be one result
+				while (result.hasNext()) {
+				    BindingSet solution = result.next();			  
+				    trialResourceName = solution.getValue("trial").toString();
+				   System.out.println("trial resource name is " + trialResourceName);		    
+			}
+				*/
+				model.addAll(makeConflictRep(trial));
+				//result.close();
+			}
+			System.out.println("The statements to be added");
+			for (Statement stmt : model)
+				System.out.println(stmt);
+			conn.add(model);
+			conn.commit();
+			conn.close();
+			repo.shutDown();
+		} catch (RepositoryException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (MalformedQueryException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (QueryEvaluationException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		System.out.println("done");
+	}
+	
+	// create the rdf to represent a Conflict
+		private static Model makeConflictRep(ClinicalTrialInfo trial) {
+
+			ValueFactory valFactory = SimpleValueFactory.getInstance();
+
+			Iterator<Conflict> conflictIter = trial.getConflictsIterator();
+			
+			// conflicts are numbered starting at 1
+			int conflictnum = 1;
+			String nctID = trial.getNctId();
+			Model model = new LinkedHashModel();
+			while (conflictIter.hasNext())
+			{
+				// create the conflict resource name
+				String conflictID = nctID + "conflict" + conflictnum;
+				IRI conflictIRI = valFactory.createIRI(CT, conflictID);
+				
+				// conflict resource has the type Conflict
+				 model.add(conflictIRI, 
+						 valFactory.createIRI(RDF, "type"), 
+						 valFactory.createIRI(CT, "Conflict"));
+				 
+				 // get the actual conflict information
+				Conflict conflict = conflictIter.next();
+				
+				// trial resource hasConflict conflict resource
+				model.add(valFactory.createIRI(CT,nctID), 
+						valFactory.createIRI(CT,"hasConflict"), 
+						conflictIRI);
+				
+				//conflict resource hasConflictNCT nctid
+				model.add(conflictIRI, 
+						valFactory.createIRI(CT,"hasConflictNCT"), 
+						valFactory.createLiteral(conflict.getNctId()));
+		
+				// conflict resource hasConflictCui CUI
+				model.add(conflictIRI, 
+						valFactory.createIRI(CT,"hasConflictCui"), 
+						valFactory.createLiteral(conflict.getCui()));
+				
+				// conflict resource hasIntCoveredText intervention covered text
+				model.add(conflictIRI, 
+						valFactory.createIRI(CT,"hasIntCoveredText"), 
+						valFactory.createLiteral(conflict.getInterventionCoveredText()));
+				
+				// conflict resource hasCriteriaCoveredText criteria covered text
+				model.add(conflictIRI, 
+						valFactory.createIRI(CT,"hasCriteriaCoveredText"), 
+						valFactory.createLiteral(conflict.getCriteriaCoveredText()));
+				
+				// conflict resource hasCriterion criterion
+				model.add(conflictIRI, 
+						valFactory.createIRI(CT,"hasCriterion"), 
+						valFactory.createLiteral(conflict.getCriterion()));
+				
+				// conflict resource hasPatternTypeName pattern type name
+				model.add(conflictIRI, 
+						valFactory.createIRI(CT,"hasPatternTypeName"), 
+						valFactory.createLiteral(conflict.getPatternTypeName()));
+			
+
+			    conflictnum++;
+			}
+		
+			return model;
+		}
+
 	public static int computeConflictScore(ClinicalTrialInfo A, ClinicalTrialInfo B, PrintWriter output) throws FileNotFoundException{
 		
 		int conflictScore = 0;
@@ -424,7 +573,7 @@ public class ConflictAnalysis {
 
 		try {
 
-			fin = new FileInputStream("/home/ctproj/GitRepos/krgenRepo/krgen/trials.txt");
+			fin = new FileInputStream("trials.txt");
 			ois = new ObjectInputStream(fin);
 			inputTrials = (ArrayList<ClinicalTrialInfo>)ois.readObject();
 			
