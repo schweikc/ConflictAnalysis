@@ -252,7 +252,7 @@ public class ConflictAnalysis {
 			// set up the repository 
 			Repository repo = new StardogRepository(ConnectionConfiguration
 			        .to("ctkr")
-			        .server("http://http://149.68.20.144:5820")
+			        .server("http://149.68.20.144:5820")
 			        .credentials("admin", "admin"));
 
 			         repo.initialize();
